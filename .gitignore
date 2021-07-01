@@ -10,7 +10,6 @@
 *.svg
 *.utf8.md
 *.knit.md
-*.rda
 *.RDataTmp
 *.png
 *.sav

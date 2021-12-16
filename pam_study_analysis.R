@@ -27,10 +27,57 @@ S <- D %>% group_by(Participant, Condition) %>%
             trial_rate_sham = explicitSham / totalTrials,
             trial_rate_mitigate = mitigateFail / totalTrials,
             trial_rate_positive = (accInput+assistInput+explicitSham) / (totalTrials-mitigateFail),
+            time_total = sum(time_delta),
             PercNormalized = unique(PercNormalized),
-            FrustNormalized = unique(FrustNormalized))
+            FrustNormalized = unique(FrustNormalized),
+            Order = unique(Order))
+
+# Count the number of motor imagery attempts in total
+S <- D %>% ungroup() %>% group_by(Participant, Condition) %>%
+  filter(Period %in% c("RestPeriod", "OpenPeriod")) %>%
+  summarize(mi_recog = sum(Event == "MotorImagery"),
+            mi_recog_openperiod = sum(Event == "MotorImagery" & Period == "OpenPeriod"),
+            mi_recog_restperiod = sum(Event == "MotorImagery" & Period == "RestPeriod")) %>% right_join(S)
+
+# Group people and count them based on 
+# Group Low: Participants with very low (more than half feedback was negative)
+# Group Exact: Participants close to the target rate with few false positives.
+# Group FP: Participants with more than double the false positives.
+S <- S %>% mutate(mi_group = "ExactGroup",
+                  mi_group = ifelse(mi_recog_openperiod < (totalTrials*0.5), "LowGroup",mi_group),
+                  mi_group = ifelse(mi_recog > (totalTrials*2), "FPGroup",mi_group))
+
+S %>% ungroup() %>% group_by(mi_group) %>%
+  summarize(count = n())
+  
+# Group people and count them based on
+# Group low variability: Participants which produced a consistent number of MI events.
+# Group high variability: Participants with high variability in MI events.
+S %>% ungroup() %>% group_by(Participant) %>%
+  summarize(mi_stability = ifelse(length(unique(mi_group)) > 1, "unstable", "stable")) %>%
+  ungroup() %>% group_by(mi_stability) %>%
+  summarize(count = n())
+
 
 #S %>% select(Participant, Condition, fishCaught, PercNormalized,FrustNormalized) %>% arrange(PercNormalized) %>% view()
+
+#############
+# Bar chart depicting mi recognition
+#############
+
+fig1 <- fig %>%
+  add_trace(data = S %>% arrange(Participant, Order), y=~mi_recog, type='bar', color=I('grey80'),
+            marker = list(line = list(width = 0, color = 'rgb(0, 0, 0)'))) %>%
+  add_trace(data = S %>% arrange(Participant, Order), y=~mi_recog_openperiod, type='bar', color=I('grey60'),
+            marker = list(line = list(width = 0, color = 'rgb(0, 0, 0)'))) %>%
+  layout(showlegend=F, barmode='overlay', yaxis = list(title="Recognition"),
+         xaxis = list(range=c(-1,70), tickmode='array', tickvals=0:69,ticktext=~paste(Participant,Condition), title=""))  
+fig1 <- fig1 %>%
+  add_trace(data = tibble(x=c(-10,100), y=c(20,20)), x=~x, y=~y, type='scatter', color=I('black'),
+            mode='lines', line=list(width=1))
+fig1
+
+orca(fig1, "fig/motor-imagery-event-count-bar-charts.pdf", width=950, height=475)
 
 #############
 # Level of Control to Perceived Control
@@ -119,3 +166,16 @@ fig_f
 
 vis <- subplot(fig_f, fig_p) %>% layout(showlegend=FALSE)
 vis
+
+
+# fig_f <- fig %>%
+# add_trace(x=S_vis$trial_rate_positive, y=S_vis$FrustNormalized, color=I("white"),
+          #marker=list(symbol='circle', size=19, line=list(width=1,color=I("black"))),
+          #type='scatter', mode='markers') %>%
+  #add_trace(x=S_vis$trial_rate_positive, y=S_vis$FrustNormalized, text=S_vis$Condition,
+            #type='scatter', mode='text', textfont=list(size=9)) %>%
+  #layout(xaxis=list(range=c(-0.1,1.1), title="Control"),
+         #yaxis=list(range=c(-0.1,1.1), title="Frustration"))
+
+
+#

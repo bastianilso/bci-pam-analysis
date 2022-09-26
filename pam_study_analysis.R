@@ -1,12 +1,14 @@
 library(plotly)
+library(ordinal)
 library(tidyverse)
-library(lme4)
-library(MuMIn)
+#library(lme4)
+library(buildmer)
+#library(MuMIn)
 options("digits.secs"=6)
 options(max.print=1000)
 
 source("utils/visutils.R")
-source("utils/calcutils.R")
+source("utils/clmcalcutils.R")
 
 fig <- plot_ly() %>%
   config(scrollZoom = TRUE, displaylogo = FALSE, modeBarButtonsToRemove = c("pan2d","select2d","hoverCompareCartesian", "toggleSpikelines","zoom2d","toImage", "sendDataToCloud", "editInChartStudio", "lasso2d", "drawclosedpath", "drawopenpath", "drawline", "drawcircle", "eraseshape", "autoScale2d", "hoverClosestCartesian","toggleHover", "")) %>%
@@ -53,13 +55,21 @@ St <- D %>% group_by(Participant, Condition) %>%
             pam_rate = unique(ifelse(Condition == "MF", trial_rate_mitigate, pam_rate)),
             time_total = sum(time_delta),
             PercNormalized = unique(PercNormalized),
+            PercNormalized.f = unique(PercNormalized.f),
+            PerceivedPerformance = unique(PerceivedPerformance),
             Gender = unique(Gender),
+            Gender.f = unique(Gender.f),
             Age = unique(Age),
             FrustNormalized = unique(FrustNormalized),
+            FrustNormalized.f = unique(FrustNormalized.f),
             Order = unique(Order),
             bci_experience = unique(TriedBCIBefore),
             Hardest = unique(Hardest),
-            Easiest = unique(Easiest))
+            Hardest.f = unique(Hardest.f),
+            Easiest = unique(Easiest),
+            Easiest.f = unique(Easiest.f),
+            Condition.f = unique(Condition.f),
+            Participant.f = unique(Participant.f))
 
 # Count the number of motor imagery attempts in total
 St <- D %>% ungroup() %>% group_by(Participant, Condition) %>%
@@ -111,6 +121,7 @@ St %>% ungroup() %>% group_by(Participant) %>%
 Sp <- St %>% ungroup() %>% group_by(Participant) %>%
   summarize(Gender = unique(Gender),
             Age = unique(Age),
+            perceived_performance = unique(PerceivedPerformance),
             mean_perc = mean(PercNormalized),
             mean_frust = mean(FrustNormalized),
             mean_rate = mean(rate_trial),
@@ -119,11 +130,18 @@ Sp <- St %>% ungroup() %>% group_by(Participant) %>%
 
 Sc <- St %>% ungroup() %>% group_by(Condition) %>%
   summarize(
+            mean_perceived_performance = mean(PerceivedPerformance, na.rm=T),
+            sd_perceived_performance = sd(PerceivedPerformance, na.rm=T),
             mean_pam_rate = mean(pam_rate),
+            sd_pam_rate = sd(pam_rate),
             mean_perc = mean(PercNormalized),
+            sd_perc = sd(PercNormalized),
             mean_frust = mean(FrustNormalized),
+            sd_frust = sd(FrustNormalized),
             mean_rate = mean(rate_trial),
+            sd_rate = sd(rate_trial),
             mean_feedback = mean(rate_feedback),
+            sd_feedback = sd(rate_feedback),
             mean_hardest = sum(ifelse(Hardest,0,1)),
             mean_easiest = sum(ifelse(Easiest,0,1)),
             )
@@ -149,9 +167,10 @@ cri = tibble(lv_perc = c(0.1, 0.35,0.68,0.82,1.1),
              lv_fish = c(0,2,4,6,10),
              lv_lost = c(8,4,2,1,0))
 
-Sp_table <- Sp %>% select(Participant, Gender, Age, , bci_experience, mean_perc, mean_frust, mean_rate, mean_feedback) %>%
+Sp_table <- Sp %>% select(Participant, Gender, Age, perceived_performance, bci_experience, mean_perc, mean_frust, mean_rate, mean_feedback) %>%
   mutate(
         mean_perc_c = t_color(mean_perc, cri$lv_perc, cri$colors),
+        perceived_performance_c = t_color(perceived_performance, cri$lv_rate, cri$colors),
         mean_frust_c = t_color(mean_frust, cri$lv_frust, cri$colors),
         mean_rate_c = t_color(mean_rate, cri$lv_rate, cri$colors),
         mean_feedback_c = t_color(mean_feedback, cri$lv_rate, cri$colors),
@@ -165,11 +184,12 @@ Sp_table <- Sp %>% select(Participant, Gender, Age, , bci_experience, mean_perc,
         mean_frust = paste0("\\cellcolor{", mean_frust_c, "}", mean_frust),
         mean_rate = paste0("\\cellcolor{", mean_rate_c, "}", mean_rate),
         mean_feedback = paste0("\\cellcolor{", mean_feedback_c, "}", mean_feedback),
-        mean_perc_c = NULL, mean_frust_c = NULL, mean_rate_c = NULL, mean_feedback_c = NULL,
+        perceived_performance = paste0("\\cellcolor{", perceived_performance_c, "}", perceived_performance),
+        mean_perc_c = NULL, mean_frust_c = NULL, mean_rate_c = NULL, mean_feedback_c = NULL, perceived_performance_c = NULL,
         across(everything(), as.character))
 Sp_table <- Sp_table %>%
   rename(`Perc. Control` = mean_perc, `Frustration` = mean_frust, `MI Conv. Rate` = mean_rate,
-         `Pos. Feedback` = mean_feedback, `BCI Experience` = bci_experience)
+         `Pos. Feedback` = mean_feedback, `Perceived Performance` = perceived_performance, `BCI Experience` = bci_experience)
 
 
 Sp_table = Sp_table %>% pivot_longer(cols=-c(Participant), names_to = "Variable") %>%
@@ -217,6 +237,334 @@ St_table <- St_table %>% group_by(Condition) %>%
 paste(colnames(St_table), collapse=" & ")
 writeLines(paste(St_table %>% apply(.,1,paste,collapse=" & "), collapse=" \\\\ "), "table.txt")
 
+#############
+# Variables and min/max of each.
+#############
+
+
+
+vartable <- St %>% select(PercNormalized,FrustNormalized,rate_trial, 
+                          rate_feedback, fishCaught, fishLost, fishReel,
+                          fishUnreel, pam_rate) %>%
+  pivot_longer(cols=c(PercNormalized,FrustNormalized,rate_trial, 
+                     rate_feedback, fishCaught, fishLost, fishReel,
+                     fishUnreel, pam_rate), names_to = "Variable") %>%
+  group_by(Variable) %>%
+  summarize(Min = min(value),
+            Max = max(value),
+            Mean = mean(value),
+            SD = sd(value)
+            ) %>%
+  mutate(Mean = format(round(Mean,2), nsmall = 2),
+         SD = format(round(SD,2), nsmall = 2)) %>%
+  mutate(across(everything(), ~ str_replace_all(.x, c("fishCaught" = "Fish Caught",
+                                                 "fishLost" = "Fish Lost",
+                                                 "fishUnreel" = "Fish Unreel",
+                                                 "rate_feedback" = "Pos. Feedback",
+                                                 "pam_rate" = "PAM Rate",
+                                                 "fishReel" = "Fish Reel",
+                                                 "rate_trial" = "MI Conv. Rate",
+                                                 "PercNormalized" = "Perceived Control",
+                                                 "Condition.f" = "Condition",
+                                                 "FrustNormalized" = "Frustration"))))
+
+vartable = vartable %>%  right_join(read.csv("vartable.csv", sep=";"))
+
+vartable <- vartable %>% group_by(`Variable.Type`) %>%
+  mutate(Type = " ") %>%
+  group_modify(~ add_row(Type=paste("\\underline{",.y,"}"),.before=0, .x)) %>%
+  ungroup() %>% replace(is.na(.)," ") %>% arrange(desc(Variable.Type)) %>%
+  select(Variable, Type, Min, Max, Mean, SD, Description)
+
+
+message(paste(colnames(vartable), collapse=" & "))
+message(paste(vartable %>% apply(.,1,paste,collapse=" & "), collapse=" \\\\ "))
+
+
+#############
+# Cumulative Link Mixed Models: All
+#############
+clmms = list(predictors = c("FrustNormalized.f", "PercNormalized.f"),
+             random = c("bci_experience"),
+             fixed = c("rate_trial","rate_feedback", "Condition.f", 
+                      "pam_rate", "fishCaught","fishReel","fishUnreel", "fishLost"),
+             null = c("Participant.f"),
+             threshold = 0.05,
+             df = St)
+
+table = g_clmm_table(clmms)
+
+
+clmm_table <- table %>% filter(`$\\chi^2$` < 0.05) %>% 
+  mutate(`Random Intercept` = "Participant",
+         `$\\chi^2$` = format(round(`$\\chi^2$`,3), nsmall = 3),
+         `$\\chi^2$` = ifelse(`$\\chi^2$` == "0.000", "$<$0.001", `$\\chi^2$`),
+         across(everything(), ~ str_replace_all(.x, c("fishCaught" = "Fish Caught",
+                                                      "fishLost" = "Fish Lost",
+                                                      "fishUnreel" = "Fish Unreel",
+                                                      "rate_feedback" = "Pos. Feedback",
+                                                      "pam_rate" = "PAM Rate",
+                                                      "fishReel" = "Fish Reel",
+                                                      "rate_trial" = "MI Conv. Rate",
+                                                      "PercNormalized.f" = "Perceived Control",
+                                                      "\\(1\\| Participant.f \\) \\+ " = "",
+                                                      "Condition.f" = "Condition",
+                                                      "FrustNormalized.f" = "Frustration")))
+  ) %>%
+  select(Predicted, `Fixed Effect`, AIC, ML, LR, `$\\chi^2$`) 
+
+
+clmm_table <- clmm_table %>% group_by(Predicted) %>%
+  mutate(Predictor = " ") %>%
+  group_modify(~ add_row(Predictor=paste("\\underline{",.y,"}"),.before=0, .x)) %>%
+  ungroup() %>% replace(is.na(.)," ") %>% arrange(desc(Predicted), AIC) %>%
+  select(Predicted = Predictor, `Fixed Effect`, AIC, ML, LR, `$\\chi^2$`)
+
+
+
+
+message(paste(colnames(clmm_table), collapse=" & "))
+message(paste(clmm_table %>% apply(.,1,paste,collapse=" & "), collapse=" \\\\ "))
+
+
+model.null = clm(PercNormalized.f ~ 1 + pam_rate + fishLost, data=St)
+
+model.bci = clmm(PercNormalized.f ~ 1 + pam_rate + fishLost + (1|Participant), data=St)
+
+model.null = clm(FrustNormalized.f ~ 1 + fishLost, data=St)
+
+model.bci = clmm(FrustNormalized.f ~ 1 + fishLost + (1|Participant), data=St)
+
+anova(model.bci, model.null)
+
+modelperc = clmm(PercNormalized.f ~ 1 +
+                   pam_rate +
+                   fishLost +
+                   (1|Participant),
+                 data=St)
+modelcond = clmm(PercNormalized.f ~ 1 +
+                   Condition.f +
+                   fishLost +
+                   (1|Participant),
+                 data=St)
+modelfrust = clmm(FrustNormalized.f ~ 1 +
+                   fishLost +
+                   (1|Participant),
+                 data=St)
+
+
+modelperc.summary = summary(modelperc)
+modelfrust.summary = summary(modelfrust)
+modelcond.summary = summary(modelcond)
+
+fixedtable = as.data.frame(modelfrust.summary$coefficients) %>% 
+  rownames_to_column("Fixed Effect") %>%
+  filter(`Fixed Effect` %in% c("pam_rate", "fishLost")) %>%
+  mutate(Predicted = "Frustration") 
+
+fixedtable = as.data.frame(modelperc.summary$coefficients) %>% 
+  rownames_to_column("Fixed Effect") %>%
+  filter(`Fixed Effect` %in% c("pam_rate", "fishLost")) %>%
+  mutate(Predicted = "Perceived Control") %>% bind_rows(fixedtable)
+
+
+fixedtable = fixedtable %>%
+  rename(`p` = `Pr(>|z|)`) %>%
+  mutate(Estimate = format(round(Estimate,2), nsmall = 2),
+         `Std. Error` = format(round(`Std. Error`,2), nsmall = 2),
+         `z value` = format(round(`z value`,2), nsmall = 2),
+         `p` = format(round(`p`,3), nsmall = 3),
+         `p` = ifelse(`p` == "0.000", "$<$0.001", `p`),
+         across(everything(), ~ str_replace_all(.x, c("fishLost" = "Fish Lost",
+                                                      "pam_rate" = "PAM Rate"))))
+
+fixedtable <- fixedtable %>% group_by(Predicted) %>%
+  mutate(Predictor = " ") %>%
+  group_modify(~ add_row(Predictor=paste("\\underline{",.y,"}"),.before=0, .x)) %>%
+  ungroup() %>% replace(is.na(.)," ") %>% arrange(desc(Predicted)) %>%
+  select(Predicted = Predictor, `Fixed Effect`, `Estimate`, `Std. Error`, `z value`, `p`)
+
+
+message(paste(colnames(fixedtable), collapse=" & "))
+message(paste(fixedtable %>% apply(.,1,paste,collapse=" & "), collapse=" \\\\ "))
+
+# TODO: Make equivalent table, but for random effect where SD and variance are reported.
+randomtable = tibble(Predicted = "Perceived Control",
+                     `Random Effect` = "Participant",
+                     `Variance` = 3.694,
+                     `SD` = as.numeric(modelperc.summary$ST),
+                     `p` = "-")
+randomtable = randomtable %>% 
+  add_row(Predicted = "Frustration",
+          `Random Effect` = "Participant",
+          `Variance` = 5.758,
+          `SD` = as.numeric(modelfrust.summary$ST))
+
+randomtable = randomtable %>%
+  mutate(`Variance` = format(round(`Variance`,2), nsmall = 2),
+         `SD` = format(round(`SD`,2), nsmall = 2))
+
+message(paste(colnames(randomtable), collapse=" & "))
+message(paste(randomtable %>% apply(.,1,paste,collapse=" & "), collapse=" \\\\ "))
+
+#############
+# Cumulative Link Models: Manual attempt.
+#############
+
+
+model.null = clmm(FrustNormalized.f ~ 1 + (1|Participant), data=St)
+
+model.fishcond = clmm(FrustNormalized.f ~ 1 + fishUnreel + (1|Participant),
+                  data=St)
+
+# OK, so we can do backwards CLMM
+model.full = clmm(PercNormalized.f ~ 
+                   trial_rate_positive + 
+                   rate_trial +
+                   rate_feedback +
+                   Gender.f + 
+                   Condition.f +
+                   pam_rate +
+                   fishCaught +
+                   fishLost +
+                   fishReel + 
+                   fishUnreel +
+                   (1|Participant),
+                      data=St)
+
+a <- anova(model.fishcond, model.null)
+
+buildclmm(PercNormalized ~ 
+            trial_rate_positive + 
+            rate_trial +
+            rate_feedback +
+            Gender + 
+            Condition +
+            pam_rate +
+            fishCaught +
+            fishLost +
+            fishReel + 
+            fishUnreel +
+            (1|Participant),
+          data=St)
+
+
+
+# Remaining Questions: How do I get to see the outcomes of the in-between models?
+
+
+
+model <- buildclmm(PercNormalized ~ 
+                     trial_rate_positive + 
+                     rate_trial +
+                     rate_feedback +
+                     Gender + 
+                     Condition +
+                     pam_rate +
+                     fishCaught +
+                     fishLost +
+                     fishReel + 
+                     fishUnreel +
+                     (1|Participant),
+                   data=St,
+                   buildmerControl=list(direction='order', crit='AIC'))
+
+model <- buildclmm(FrustNormalized ~ 
+                     trial_rate_positive + 
+                     rate_trial +
+                     rate_feedback +
+                     Gender + 
+                     Condition +
+                     pam_rate +
+                     fishCaught +
+                     fishLost +
+                     fishReel + 
+                     fishUnreel +
+                     (1|Participant),
+                   data=St)
+
+model <- buildclmm(Easiest ~ 
+                     trial_rate_positive + 
+                     rate_trial +
+                     rate_feedback +
+                     Gender + 
+                     Condition +
+                     pam_rate +
+                     fishCaught +
+                     fishLost +
+                     fishReel + 
+                     fishUnreel +
+                     (1|Participant),
+                   data=St)
+
+model <- buildclmm(Hardest ~ 
+                     trial_rate_positive + 
+                     rate_trial +
+                     rate_feedback +
+                     Gender + 
+                     Condition +
+                     pam_rate +
+                     fishCaught +
+                     fishLost +
+                     fishReel + 
+                     fishUnreel +
+                     (1|Participant),
+                   data=St)
+
+# Research Questions we want to answer:
+# What variable is better at explaining the data:
+# fishCaught? vs positive feedback in general, vs fish Reel? fishLost?
+# ability to control BCI?
+# Also, how well does it explain the data? Are there parts we cannot explain? (certain amounts?) How "tight" is the model fit?
+
+# Can I use "Likelihood ratio test" scores to explain that somehow? or is the "AIC" of each model more suitable? should the variables be run "in isolation", to produce AIC/LRT scores, that we then list in a table? or maybe this is where we need to use "deviance" ?
+
+
+m <- buildmer(f,data=vowels,
+
+
+model.caught = clmm(PercNormalized ~ fishCaught + (1|Participant),
+                 data=St)
+
+# The Hessian value gives some indication of how well defined the model is.
+
+
+anova(model.fishcond, model.null)
+
+fm1 <- clmm(rating ~ contact + temp + (1|judge), data=wine)
+ordinal::VarCorr(fm1)
+
+a = VarCorr.clmm(model.fishcond)
+
+marginal = emmeans(model.fishcond, ~ Condition)
+pairs(marginal, adjust="tukey")
+
+#############
+# Linear Mixed Models: Visual Inspection of Homoskedasticity and Normality
+#############
+# After we run the comparison of all possible models (below), we can manually check
+# the residuals of the models to ensure they look good.
+
+#form_test = paste("(1|",r,")","+",form_null)
+#form_r = paste(p,"~", form_test)
+#form_n = paste(p,"~", form_null)
+#m_r = lmer(form_r, data = df, REML=F)
+
+model = lmer(PercNormalized ~ Condition + (1|Participant),
+                        data=St,
+                        REML=FALSE)
+model.null = lmer(PercNormalized ~ (1|Participant),
+             data=St,
+             REML=FALSE)
+
+anova(model.null, model)
+
+
+qqnorm(residuals(model))
+qqline(residuals(model))
+hist(residuals(model))
+
+plot(fitted(model),residuals(model))
 
 
 #############

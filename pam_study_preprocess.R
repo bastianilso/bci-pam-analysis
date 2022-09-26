@@ -7,7 +7,12 @@ options("digits.secs"=6)
 # Load data from directories
 # For some reason we only have original data from Participant 1-10 in the folder.
 # So load the data from the RDA file instead!
-#D <- LoadFromDirectory("data", event="Game")
+
+
+
+D <- LoadFromDirectory("data", event="Game")
+
+
 #save(D, file = 'data_pam_raw.rda', compress=TRUE)
 
 load('data_pam_raw.rda')
@@ -53,10 +58,10 @@ D <- D %>% mutate(TrialFeedback = NA,
 #cv <- D %>% group_by(Participant, Condition, TrialFeedback) %>% filter(Event == "GameDecision") %>%
 #   summarize(n())
 # 
-D %>% filter(Participant == 1, Condition == "AS", Event != "Sample") %>%
-  select(Participant, Condition, Timestamp, Event,
-         InputWindowOrder, TrialResult, TrialFeedback,
-         fishFeedback, fishLost) %>% view()
+#D %>% filter(Participant == 1, Condition == "AS", Event != "Sample") %>%
+#  select(Participant, Condition, Timestamp, Event,
+#         InputWindowOrder, TrialResult, TrialFeedback,
+#         fishFeedback, fishLost) %>% view()
 
 D = D %>% mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS")) %>%
   arrange(Timestamp) %>%
@@ -129,6 +134,16 @@ L <- L %>% mutate(Hardest = ifelse(Hardest == "Yes", T,F),
                   Easiest = ifelse(is.na(Easiest), F, Easiest))
 
 
+L = L %>% mutate(Easiest.f = factor(Easiest, levels=unique(Easiest)),
+                 Hardest.f = factor(Hardest, levels=unique(Hardest)),
+                 PercNormalized.f = factor(PercNormalized,ordered=TRUE),
+                 FrustNormalized.f = factor(FrustNormalized,ordered=TRUE),
+                 Gender.f = factor(Gender, levels=unique(Easiest)))
+
+# Fix missing data in PerceivedPerformance for P5
+#L <- L %>% mutate(PerceivedPerformance = ifelse(is.na(PerceivedPerformance), -1, PerceivedPerformance))
+
+
 #############
 # Merge
 #############
@@ -139,6 +154,8 @@ L <- L %>% mutate(Hardest = ifelse(Hardest == "Yes", T,F),
 
 D <- D %>% left_join(L, by=c('Condition' = 'Condition', 'Participant' = 'Participant'))
 
+D = D %>% mutate(Participant.f = factor(Participant, levels=unique(Participant)),
+                 Condition.f = factor(Condition, levels=c("NO","AS","IO","MF")))
 
 #############
 # Save to RDA

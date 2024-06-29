@@ -5,14 +5,10 @@ source("utils/loadrawdata.R")
 options("digits.secs"=6)
 
 # Load data from directories
+# WARNING::
 # For some reason we only have original data from Participant 1-10 in the folder.
 # So load the data from the RDA file instead!
-
-
-
-D <- LoadFromDirectory("data", event="Game")
-
-
+#D <- LoadFromDirectory("data", event="Game")
 #save(D, file = 'data_pam_raw.rda', compress=TRUE)
 
 load('data_pam_raw.rda')
@@ -44,6 +40,11 @@ D <- D %>% group_by(Participant, Condition, InputWindowOrderFish) %>%
 posTrial = c("AccInput", "AugSuccess", "AssistSuccess", "ExplicitSham", "OverrideInput")
 negTrial = c("RejInput")
 neuTrial = c("AssistFail", "MitigateFail")
+
+# Remove duplicate trial labels in TrialResult.
+D <- D %>% mutate(TrialResult = ifelse(TrialResult == "AssistSuccess", "AugSuccess", TrialResult),
+                  TrialResult = ifelse(TrialResult == "ExplicitSham", "OverrideInput", TrialResult),
+                  TrialResult = ifelse(TrialResult == "AssistFail", "MitigateFail", TrialResult))
 
 # Define TrialFeedback, a column denoting what feedback was given during the trial.
 D <- D %>% mutate(TrialFeedback = NA,
@@ -97,25 +98,84 @@ D = D %>% mutate(InputWindowClosedID = NA,
                  InputWindowClosedFill = ifelse(InputWindowClosedID == 0, NA, InputWindowClosedID)) %>%
   tidyr::fill(InputWindowClosedFill, .direction="down")
 
-# Create InputWindowOrderFilled column - an identifier for open periods.
-# Test: D %>% filter(Participant == 6) %>% select(Event, Participant, Condition, InputWindowOrderWithDecision,InputWindowOrderFilled, InputWindow, InputWindowClosedFill) %>% view()
+
+# Remove Text NAs in TrialResult,convert to real NAs.
+D = D %>% mutate(TrialResult = ifelse(TrialResult == "NA", NA, TrialResult))
+
+
+# Clean values up in all other columns except for InputWindowChange.
+# GameStopped and GameStarted should be reported with -1 for InputWindowOrder.
+# Check combinations of events and IDs: unique(paste(D$Event,D$InputWindowOrder))
 D = D %>% group_by(Participant, Condition) %>% 
   mutate(InputWindowOrder = ifelse(Event == "GameStopped", -1, InputWindowOrder),
          InputWindowOrder = ifelse(Event == "GameRunning", -1, InputWindowOrder),
-         InputWindowOrderWithDecision = InputWindowOrder,
-         InputWindowOrder = ifelse(InputWindow == "Closed", -1, InputWindowOrder),
-         Period = NA,
-         Period = ifelse(Event == "InputWindowChange" & InputWindow == "Closed", "RestPeriod", Period),
-         Period = ifelse(Event == "InputWindowChange" & InputWindowClosedID == max(InputWindowClosedID, na.rm=T), "PostGame", Period),
-         Period = ifelse(Event == "InputWindowChange" & InputWindow == "Open", "OpenPeriod", Period),
-         Period = ifelse(Event == "GameRunning", "PreGame", Period),
-         InputWindowOrderFilled = InputWindowOrder) %>%
-  tidyr::fill(InputWindowOrderFilled, .direction="down") %>%
-  tidyr::fill(Period, .direction="down")
+         InputWindowOrder = ifelse(Event == "ArrowKeyInput", NA, InputWindowOrder),
+         InputWindowOrder = ifelse(Event == "FishEvent", NA, InputWindowOrder),
+         InputWindowOrder = ifelse(Event == "GameDecision", NA, InputWindowOrder))
 
 # InputWindowOrder should be numeric but can contain the value "Stopped"
 # if the game was interrupted. Change "Stopped" to NA.
 D <-D %>% mutate(InputWindowOrder = as.numeric(InputWindowOrder))
+
+
+# Create variable for locating GameDecisions within Rest periods and associating them to open periods.
+D = D %>% group_by(Participant, Condition) %>%
+    mutate(InputWindowOrderWithRest = InputWindowOrder) %>%
+    tidyr::fill(InputWindowOrderWithRest, .direction="down") %>%
+    mutate(InputWindowOrderWithRest = as.numeric(InputWindowOrderWithRest))
+
+
+#D %>% filter(Participant == 13) %>% select(Event, InputWindowOrder, InputWindowOrderWithRest, Condition) %>% view()    
+
+D = D %>% group_by(Participant, Condition, InputWindowOrderWithRest) %>% 
+  mutate(TrialResultWindow = TrialResult,
+         TrialFeedbackWindow = TrialFeedback) %>%
+  tidyr::fill(TrialResultWindow, .direction="up") %>%
+  tidyr::fill(TrialFeedbackWindow, .direction="up")
+
+#D %>% filter(Participant == 13) %>% select(Event, InputWindowOrder, InputWindowOrderWithRest, TrialResultWindow, TrialFeedbackWindow, Condition) %>% view()    
+
+# Create a column encoding the timestamp of the InputWindowChange.
+# This will be used when encoding the open and closing period, to make sure all events with matching timestamp are 
+# considerd part of the open period.
+D = D %>% group_by(Participant, Condition, InputWindowOrderWithRest) %>%
+  summarize(TimestampInputWindowClosed = Timestamp[Event=="InputWindowChange" & InputWindow=="Closed"]) %>%
+  right_join(D)
+  
+
+# Create InputWindowOrderFilled column - an identifier for open periods.
+# Test: D %>% filter(Participant == 6) %>% select(Event, Participant, Condition, InputWindowOrderWithDecision,InputWindowOrderFilled, InputWindow, InputWindowClosedFill) %>% view()
+D = D %>% group_by(Participant, Condition) %>% 
+  mutate(Period = NA,
+         Period = ifelse(Event == "InputWindowChange" & InputWindow == "Closed", "RestPeriod", Period),
+         Period = ifelse(Event == "InputWindowChange" & InputWindowClosedID == max(InputWindowClosedID, na.rm=T), "PostGame", Period),
+         Period = ifelse(Event == "InputWindowChange" & InputWindow == "Open", "OpenPeriod", Period),
+         Period = ifelse(Event == "GameRunning", "PreGame", Period)) %>%
+  tidyr::fill(Period, .direction="down")
+
+# Period will not count in rows with similar timestamps as the end of the input window.
+# This needs to be fixed after running the fill.
+D = D %>% group_by(Participant, Condition) %>% 
+  mutate(Period = if_else(paste(Timestamp) == paste(TimestampInputWindowClosed), "OpenPeriod", Period))
+
+#D %>% filter(Participant == 13) %>% select(Event, Timestamp, Period, InputWindowOrder, InputWindowOrderWithRest, TrialResultWindow, TrialFeedbackWindow, Condition) %>% view()    
+
+
+# Create an InputWindowOrderFilled with filled numbers for each open period only.
+D = D %>% group_by(Participant, Condition) %>%
+  mutate(PeriodOrder = ifelse(Period == "OpenPeriod", InputWindowOrderWithRest, -1))
+
+#D %>% filter(Participant == 13) %>% select(Event, Period, PeriodOrder, InputWindowOrderWithRest, TrialResultWindow, TrialFeedbackWindow, Condition) %>% view()    
+
+
+# Verify that we dont have cases where InputWindows lead to no GameDecisions.
+# Do this by checking if there are NAs in TrialResultWindow.
+#D %>% group_by(Participant, Condition, PeriodOrder) %>%
+#  summarize(AccInput = sum(TrialResultWindow == "AccInput"),
+#            RejInput = sum(TrialResultWindow == "RejInput"),
+#            theNA = sum(is.na(TrialResultWindow))) %>% view()
+
+
 
 
 #############
@@ -138,7 +198,7 @@ L = L %>% mutate(Easiest.f = factor(Easiest, levels=unique(Easiest)),
                  Hardest.f = factor(Hardest, levels=unique(Hardest)),
                  PercNormalized.f = factor(PercNormalized,ordered=TRUE),
                  FrustNormalized.f = factor(FrustNormalized,ordered=TRUE),
-                 Gender.f = factor(Gender, levels=unique(Easiest)))
+                 Gender.f = factor(Gender, levels=unique(Gender)))
 
 # Fix missing data in PerceivedPerformance for P5
 #L <- L %>% mutate(PerceivedPerformance = ifelse(is.na(PerceivedPerformance), -1, PerceivedPerformance))

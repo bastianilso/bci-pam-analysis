@@ -16,6 +16,8 @@ fig <- plot_ly() %>%
 
 load('data_pam.rda')
 
+
+
 #############
 # Summaries
 #############
@@ -78,17 +80,49 @@ St <- D %>% ungroup() %>% group_by(Participant, Condition) %>%
             mi_recog_openperiod = sum(Event == "MotorImagery" & Period == "OpenPeriod"),
             mi_recog_restperiod = sum(Event == "MotorImagery" & Period == "RestPeriod")) %>% right_join(St)
 
+# Summary of Input Windows. Filter out negative period orders, focus only on actual input windows.
+Si <- D %>% ungroup() %>% filter(PeriodOrder != "-1") %>% group_by(Participant, Condition, PeriodOrder) %>%
+  summarize(TrialFeedback = paste(unique(TrialFeedbackWindow), collapse=" "),
+            TrialResult = paste(unique(TrialResultWindow), collapse=" "),
+            mi_recog_window = ifelse(sum(Event == "MotorImagery") > 0, 1,0),
+            mi_recog_window_count = sum(Event == "MotorImagery"),
+            time_window = sum(time_delta))
+
+# Each Input Window, what happened (MI?), TrialResult for the InputWindow, ..
+#Si <- D %>% ungroup() %>% filter(Period %in% c("OpenPeriod","DecisionPeriod")) %>% group_by(Condition) %>%
+#  filter(Participant == 1) %>% select(Event, TrialFeedbackLead, TrialResultLead, Condition, InputWindowOrderFilled, InputWindow) %>% view()
+
+# Check what caused different outcomes in the input windows.
+#Si %>% group_by(Condition, TrialResult) %>% summarize(mi_recog = sum(mi_recog_window == 1),
+#                                           no_recog = sum(mi_recog_window == 0)) %>% view()
+
+# Mark the affected Input Windows
+#Si %>% group_by(Condition, TrialResult) %>% mutate(invalid_col = ifelse(mi_recog_window == 0 & TrialResult == "AccInput", T,NA)) %>% view()
+#D %>% filter(Condition == AS"", Participant == 1, InputWindowOrderWithRest == 5) %>% select(Timestamp, Event, Period, TrialResult) %>% view()
+
+
 # Group by input window. Count the number of attempts in each window.
-St <- D %>% ungroup() %>% filter(Period %in% c("OpenPeriod")) %>% group_by(Participant, Condition, InputWindowOrderFilled) %>%
-  summarize(mi_recog_window = ifelse(sum(Event == "MotorImagery") > 0, 1,0), #Whether MI happened in the window
-            mi_recog_window_count = sum(Event == "MotorImagery"), #How much MI happened in the window
-            time_window = sum(time_delta)) %>%
-  filter(InputWindowOrderFilled > -1) %>% ungroup() %>% group_by(Participant, Condition) %>%
+St = Si %>% group_by(Participant, Condition) %>%
   summarize(mi_recog_trial = sum(mi_recog_window > 0),
             mi_recog_window = sum(mi_recog_window),
             time_window = sum(time_window),
             time_window_min = time_window / 60) %>%
   right_join(St)
+
+# Label input windows in Si with the conversion.
+Si <- Si %>% ungroup() %>%
+mutate(Conversion = NA,
+       Conversion = ifelse(mi_recog_window == 1 & TrialResult == "AccInput", "Positive (No Change)", Conversion),
+       Conversion = ifelse(mi_recog_window == 1 & TrialResult == "AugSuccess", "Positive to Extra Positive (AS)", Conversion),
+       Conversion = ifelse(mi_recog_window == 1 & TrialResult == "RejInput", "Positive to Rejection", Conversion),
+       Conversion = ifelse(mi_recog_window == 1 & TrialResult == "MitigateFail", "Positive to Neutral (MF)", Conversion),
+       Conversion = ifelse(mi_recog_window == 1 & TrialResult == "OverrideInput", "Positive to Overridden Positive (IO)", Conversion),
+       Conversion = ifelse(mi_recog_window == 0 & TrialResult == "AccInput", "Negative to Positive (BUG)", Conversion),
+       Conversion = ifelse(mi_recog_window == 0 & TrialResult == "AugSuccess", "Negative to Extra Positive (BUG)", Conversion),
+       Conversion = ifelse(mi_recog_window == 0 & TrialResult == "RejInput", "Negative (No Change)", Conversion),
+       Conversion = ifelse(mi_recog_window == 0 & TrialResult == "MitigateFail", "Negative to Neutral (MF)", Conversion),
+       Conversion = ifelse(mi_recog_window == 0 & TrialResult == "OverrideInput", "Negative to Overridden Positive (IO)", Conversion),
+)
 
 St <- St %>% ungroup() %>%
   mutate(rate_trial = (mi_recog_trial)/totalTrials,
@@ -146,6 +180,8 @@ Sc <- St %>% ungroup() %>% group_by(Condition) %>%
             mean_easiest = sum(ifelse(Easiest,0,1)),
             )
 
+
+
 #S %>% select(Participant, Condition, fishCaught, PercNormalized,FrustNormalized) %>% arrange(PercNormalized) %>% view()
 
 save(St, file = 'pamBCI.rda', compress=TRUE)
@@ -187,6 +223,7 @@ Sp_table <- Sp %>% select(Participant, Gender, Age, perceived_performance, bci_e
         perceived_performance = paste0("\\cellcolor{", perceived_performance_c, "}", perceived_performance),
         mean_perc_c = NULL, mean_frust_c = NULL, mean_rate_c = NULL, mean_feedback_c = NULL, perceived_performance_c = NULL,
         across(everything(), as.character))
+
 Sp_table <- Sp_table %>%
   rename(`Perc. Control` = mean_perc, `Frustration` = mean_frust, `MI Conv. Rate` = mean_rate,
          `Pos. Feedback` = mean_feedback, `Perceived Performance` = perceived_performance, `BCI Experience` = bci_experience)
@@ -241,22 +278,23 @@ writeLines(paste(St_table %>% apply(.,1,paste,collapse=" & "), collapse=" \\\\ "
 # Variables and min/max of each.
 #############
 
-
-
 vartable <- St %>% select(PercNormalized,FrustNormalized,rate_trial, 
                           rate_feedback, fishCaught, fishLost, fishReel,
                           fishUnreel, pam_rate) %>%
   pivot_longer(cols=c(PercNormalized,FrustNormalized,rate_trial, 
                      rate_feedback, fishCaught, fishLost, fishReel,
-                     fishUnreel, pam_rate), names_to = "Variable") %>%
+                     fishUnreel, pam_rate), names_to = "Variable") %>% 
+  mutate(Variable = factor(Variable, levels=c("PercNormalized","FrustNormalized","rate_trial", 
+                     "rate_feedback", "fishCaught", "fishLost", "fishReel",
+                     "fishUnreel", "pam_rate"))) %>%
   group_by(Variable) %>%
   summarize(Min = min(value),
             Max = max(value),
             Mean = mean(value),
             SD = sd(value)
-            ) %>%
+            ) %>% 
   mutate(Mean = format(round(Mean,2), nsmall = 2),
-         SD = format(round(SD,2), nsmall = 2)) %>%
+         SD = format(round(SD,2), nsmall = 2)) %>% 
   mutate(across(everything(), ~ str_replace_all(.x, c("fishCaught" = "Fish Caught",
                                                  "fishLost" = "Fish Lost",
                                                  "fishUnreel" = "Fish Unreel",
@@ -268,25 +306,48 @@ vartable <- St %>% select(PercNormalized,FrustNormalized,rate_trial,
                                                  "Condition.f" = "Condition",
                                                  "FrustNormalized" = "Frustration"))))
 
-vartable = vartable %>%  right_join(read.csv("vartable.csv", sep=";"))
+vartable = vartable %>%  right_join(read.csv("vartable.csv", sep=";")) %>%
+  replace(is.na(.),"-")
 
 vartable <- vartable %>% group_by(`Variable.Type`) %>%
-  mutate(Type = " ") %>%
-  group_modify(~ add_row(Type=paste("\\underline{",.y,"}"),.before=0, .x)) %>%
+  group_modify(~ add_row(Variable=paste("\\underline{",.y,"}"),.before=0, .x)) %>%
   ungroup() %>% replace(is.na(.)," ") %>% arrange(desc(Variable.Type)) %>%
-  select(Variable, Type, Min, Max, Mean, SD, Description)
+  select(Variable, Min, Max, Mean, SD, Description)
 
 
 message(paste(colnames(vartable), collapse=" & "))
 message(paste(vartable %>% apply(.,1,paste,collapse=" & "), collapse=" \\\\ "))
 
+#############
+# Summary of Input Windows Table. % of outcome converted to what.
+#############
+
+outcome_table = Si %>%
+  group_by(Condition, Conversion) %>%
+  summarize(n = n()) %>%
+  mutate(mean = n / sum(n)) %>% ungroup() %>%
+  mutate(mean = paste0(format(round(mean * 100,1), nsmall = 0),"\\%")) %>%
+  select(-n)
+
+outcome_table <- outcome_table %>% ungroup() %>%
+mutate(across(Condition, ~ str_replace_all(.x, c("AS" = "Augmented Success",
+                                                    "IO" = "Input Override",
+                                                    "MF" = "Mitigated Failure",
+                                                    "NO" = "Normal Condition")))) %>%
+group_by(Condition) %>%
+group_modify(~ add_row(Conversion=paste("\\underline{",.y,"}"),.before=0, .x)) %>%
+ungroup() %>% replace(is.na(.)," ") %>%
+select(Outcome = Conversion, `\\%` = mean)
+
+message(paste(colnames(outcome_table), collapse=" & "))
+message(paste(outcome_table %>% apply(.,1,paste,collapse=" & "), collapse=" \\\\ "))
 
 #############
 # Cumulative Link Mixed Models: All
 #############
 clmms = list(predictors = c("FrustNormalized.f", "PercNormalized.f"),
              random = c("bci_experience"),
-             fixed = c("rate_trial","rate_feedback", "Condition.f", 
+             fixed = c("rate_trial","rate_feedback", "Condition.f", "Gender.f",
                       "pam_rate", "fishCaught","fishReel","fishUnreel", "fishLost"),
              null = c("Participant.f"),
              threshold = 0.05,
